@@ -50,12 +50,21 @@
     top:50%; transform:translateY(-50%); background:#111118; border:1px solid var(--border);
     padding:4px 8px; border-radius:5px; white-space:nowrap; font-size:11px; color:var(--text); z-index:999; pointer-events:none; }
 
-  /* CANVAS AREA */
+  /* CANVAS AREA — white workspace */
   #canvas-area { flex:1; display:flex; align-items:center; justify-content:center;
-    overflow:auto; background:var(--bg); }
-  #canvas-wrap { position:relative; line-height:0; }
-  #pixel-canvas { display:block; image-rendering:pixelated; cursor:crosshair;
-    border:1px solid var(--border); }
+    overflow:auto; background:#e8e8e8;
+    background-image: linear-gradient(45deg,#d0d0d0 25%,transparent 25%),
+                      linear-gradient(-45deg,#d0d0d0 25%,transparent 25%),
+                      linear-gradient(45deg,transparent 75%,#d0d0d0 75%),
+                      linear-gradient(-45deg,transparent 75%,#d0d0d0 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+  }
+  #canvas-wrap { position:relative; line-height:0;
+    box-shadow: 0 4px 32px rgba(0,0,0,0.35), 0 0 0 1px #bbb; }
+  /* The pixel canvas itself — background is white (index 0 = white in our palette mapping) */
+  #pixel-canvas { display:block; image-rendering:pixelated; cursor:crosshair; }
+  /* Grid drawn ON TOP via a separate canvas */
   #grid-overlay { position:absolute; inset:0; pointer-events:none; }
 
   /* RIGHT PANEL */
@@ -73,7 +82,7 @@
   #pal-scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
   #pal-grid { display:grid; grid-template-columns:repeat(16,1fr); gap:2px; }
   .pc { aspect-ratio:1; border-radius:2px; cursor:pointer; border:1px solid transparent; transition:.1s; }
-  .pc:hover { transform:scale(1.35); z-index:2; border-color:rgba(255,255,255,.4); }
+  .pc:hover { transform:scale(1.35); z-index:2; border-color:rgba(255,255,255,.5); }
   .pc.sel { border-color:#fff !important; box-shadow:0 0 0 1px var(--accent); transform:scale(1.15); z-index:3; }
 
   /* STATUSBAR */
@@ -184,83 +193,112 @@
 
 <script>
 // ── PALETTE: 216 web-safe + 40 extras ──
+// Index 0 = WHITE (background / eraser target)
 const PALETTE = (() => {
   const p = [], h = n => n.toString(16).padStart(2,'0');
+  // Index 0 = white background
+  p.push('#ffffff');
+  // Black at index 1
+  p.push('#000000');
+  // 214 web-safe colors (skip pure white #ffffff and #000000 we already added)
   const s = [0,51,102,153,204,255];
-  for (const r of s) for (const g of s) for (const b of s)
-    p.push(`#${h(r)}${h(g)}${h(b)}`);
+  for (const r of s) for (const g of s) for (const b of s) {
+    const c = `#${h(r)}${h(g)}${h(b)}`;
+    if (c !== '#ffffff' && c !== '#000000') p.push(c);
+    if (p.length === 216) break;
+  }
+  // Fill remaining up to 216 with remaining web-safe
+  while (p.length < 216) p.push('#cccccc');
+  // 40 extras
   ['#111111','#222222','#333333','#444444','#555555',
    '#666666','#777777','#888888','#999999','#aaaaaa',
-   '#bbbbbb','#cccccc','#dddddd','#eeeeee','#f5f5f5',
+   '#bbbbbb','#dddddd','#eeeeee','#f5f5f5','#f0f0f0',
    '#ffddcc','#ffccaa','#eebb88','#cc9966','#aa7744',
    '#ff9999','#ff6666','#cc3333','#991111','#660000',
    '#99ffcc','#66ddaa','#33bb88','#118866','#005544',
    '#99ccff','#6699ff','#3366ff','#1133cc','#000099',
    '#ffff99','#ffcc44','#ff9911','#cc6600','#884400'
   ].forEach(c => p.push(c));
-  return p;
+  // Trim to exactly 256
+  return p.slice(0, 256);
 })();
 
 const W = 32, H = 32;
-const pixels = new Uint8Array(W * H);
-let selIdx = 0, tool = 'pencil', drawing = false, lastIdx = -1, showGrid = true;
+const pixels = new Uint8Array(W * H); // all 0 = white
+let selIdx = 1, tool = 'pencil', drawing = false, lastIdx = -1, showGrid = true;
 
 const canvas  = document.getElementById('pixel-canvas');
 const ctx     = canvas.getContext('2d');
 const gridCv  = document.getElementById('grid-overlay');
 const gridCtx = gridCv.getContext('2d');
-const wrap    = document.getElementById('canvas-wrap');
 
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.5, 2, 3, 4];
 let zoomI = 2;
 
+function cellSize() { return Math.round(576 * ZOOM_LEVELS[zoomI]) / 32; }
+
 function applyZoom() {
-  const z = ZOOM_LEVELS[zoomI], sz = Math.round(576 * z);
-  canvas.style.width = canvas.style.height = sz + 'px';
-  gridCv.style.width = gridCv.style.height = sz + 'px';
-  gridCv.width = gridCv.height = sz;
-  document.getElementById('zoom-display').textContent = Math.round(z*100) + '%';
+  const sz = Math.round(576 * ZOOM_LEVELS[zoomI]);
+  canvas.style.width  = sz + 'px';
+  canvas.style.height = sz + 'px';
+  gridCv.style.width  = sz + 'px';
+  gridCv.style.height = sz + 'px';
+  gridCv.width  = sz;
+  gridCv.height = sz;
+  document.getElementById('zoom-display').textContent = Math.round(ZOOM_LEVELS[zoomI]*100) + '%';
   drawGrid();
 }
 
 function drawGrid() {
-  const s = gridCv.width, c = s / 32;
-  gridCtx.clearRect(0,0,s,s);
+  const s = gridCv.width;
+  const c = s / 32;
+  gridCtx.clearRect(0, 0, s, s);
   if (!showGrid) return;
-  gridCtx.strokeStyle = 'rgba(255,255,255,0.1)';
-  gridCtx.lineWidth = .5;
+
+  // Every-pixel lines — fine medium gray
+  gridCtx.strokeStyle = 'rgba(0,0,0,0.15)';
+  gridCtx.lineWidth = 0.5;
   for (let i = 0; i <= 32; i++) {
-    const p = Math.round(i*c)+.5;
-    gridCtx.beginPath(); gridCtx.moveTo(p,0); gridCtx.lineTo(p,s); gridCtx.stroke();
-    gridCtx.beginPath(); gridCtx.moveTo(0,p); gridCtx.lineTo(s,p); gridCtx.stroke();
+    const pos = Math.round(i * c) + 0.5;
+    gridCtx.beginPath(); gridCtx.moveTo(pos, 0); gridCtx.lineTo(pos, s); gridCtx.stroke();
+    gridCtx.beginPath(); gridCtx.moveTo(0, pos); gridCtx.lineTo(s, pos); gridCtx.stroke();
   }
-  gridCtx.strokeStyle = 'rgba(255,255,255,0.22)';
-  gridCtx.lineWidth = .8;
+
+  // Every-8-pixel major lines — stronger
+  gridCtx.strokeStyle = 'rgba(0,0,0,0.35)';
+  gridCtx.lineWidth = 1;
   for (let i = 0; i <= 32; i += 8) {
-    const p = Math.round(i*c)+.5;
-    gridCtx.beginPath(); gridCtx.moveTo(p,0); gridCtx.lineTo(p,s); gridCtx.stroke();
-    gridCtx.beginPath(); gridCtx.moveTo(0,p); gridCtx.lineTo(s,p); gridCtx.stroke();
+    const pos = Math.round(i * c) + 0.5;
+    gridCtx.beginPath(); gridCtx.moveTo(pos, 0); gridCtx.lineTo(pos, s); gridCtx.stroke();
+    gridCtx.beginPath(); gridCtx.moveTo(0, pos); gridCtx.lineTo(s, pos); gridCtx.stroke();
   }
 }
 
 function render() {
+  // Fill white background first (for index 0 pixels)
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, W, H);
   for (let i = 0; i < W*H; i++) {
+    if (pixels[i] === 0) continue; // white = background, already drawn
     ctx.fillStyle = PALETTE[pixels[i]];
-    ctx.fillRect(i%W, Math.floor(i/W), 1, 1);
+    ctx.fillRect(i % W, Math.floor(i / W), 1, 1);
   }
 }
 
 function renderOne(i) {
   ctx.fillStyle = PALETTE[pixels[i]];
-  ctx.fillRect(i%W, Math.floor(i/W), 1, 1);
+  ctx.fillRect(i % W, Math.floor(i / W), 1, 1);
 }
 
 // ── Palette UI ──
 const pg = document.getElementById('pal-grid');
 PALETTE.forEach((c, i) => {
   const el = document.createElement('div');
-  el.className = 'pc' + (i===selIdx?' sel':'');
+  el.className = 'pc' + (i === selIdx ? ' sel' : '');
+  // White swatch needs a visible border so it shows up in the dark panel
   el.style.background = c;
+  if (c === '#ffffff' || c === '#f5f5f5' || c === '#f0f0f0' || c === '#eeeeee')
+    el.style.border = '1px solid #666';
   el.title = `${c} [${i}]`;
   el.addEventListener('click', () => pickColor(i));
   pg.appendChild(el);
@@ -274,37 +312,37 @@ function pickColor(i) {
   document.getElementById('c-hex').textContent = PALETTE[i].toUpperCase();
   document.getElementById('c-idx').textContent = `Index: ${i}`;
 }
-pickColor(1); // start on index 1 (dark navy)
+pickColor(1); // start on black
 
 // ── Canvas interaction ──
 function pixelIdx(e) {
   const r = canvas.getBoundingClientRect();
   const x = Math.floor((e.clientX - r.left) * W / r.width);
   const y = Math.floor((e.clientY - r.top) * H / r.height);
-  return (x<0||x>=W||y<0||y>=H) ? -1 : y*W+x;
+  return (x < 0 || x >= W || y < 0 || y >= H) ? -1 : y * W + x;
 }
 
 function paint(i) {
-  if (i<0||i===lastIdx) return;
+  if (i < 0 || i === lastIdx) return;
   lastIdx = i;
-  if (tool==='pencil') pixels[i] = selIdx;
-  else if (tool==='eraser') pixels[i] = 0;
+  if (tool === 'pencil') pixels[i] = selIdx;
+  else if (tool === 'eraser') pixels[i] = 0;
   renderOne(i);
 }
 
 function fill(start, newC) {
   const tgt = pixels[start];
   if (tgt === newC) return;
-  const q = [start], vis = new Uint8Array(W*H);
+  const q = [start], vis = new Uint8Array(W * H);
   while (q.length) {
     const i = q.pop();
-    if (i<0||i>=W*H||vis[i]||pixels[i]!==tgt) continue;
-    vis[i]=1; pixels[i]=newC;
-    const x=i%W, y=Math.floor(i/W);
-    if (x>0) q.push(i-1);
-    if (x<W-1) q.push(i+1);
-    if (y>0) q.push(i-W);
-    if (y<H-1) q.push(i+W);
+    if (i < 0 || i >= W * H || vis[i] || pixels[i] !== tgt) continue;
+    vis[i] = 1; pixels[i] = newC;
+    const x = i % W, y = Math.floor(i / W);
+    if (x > 0)     q.push(i - 1);
+    if (x < W - 1) q.push(i + 1);
+    if (y > 0)     q.push(i - W);
+    if (y < H - 1) q.push(i + W);
   }
   render();
 }
@@ -312,32 +350,32 @@ function fill(start, newC) {
 canvas.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
   const i = pixelIdx(e);
-  if (i<0) return;
-  if (e.altKey || tool==='eyedropper') {
+  if (i < 0) return;
+  if (e.altKey || tool === 'eyedropper') {
     pickColor(pixels[i]);
     toast(`Picked: ${PALETTE[pixels[i]]} [${pixels[i]}]`);
     return;
   }
-  if (tool==='fill') { fill(i, selIdx); return; }
-  drawing=true; lastIdx=-1;
+  if (tool === 'fill') { fill(i, selIdx); return; }
+  drawing = true; lastIdx = -1;
   canvas.setPointerCapture(e.pointerId);
   paint(i); status(i);
 });
 canvas.addEventListener('pointermove', e => {
   const i = pixelIdx(e);
-  if (i>=0) status(i);
+  if (i >= 0) status(i);
   if (drawing) paint(i);
 });
-canvas.addEventListener('pointerup', () => { drawing=false; lastIdx=-1; });
-canvas.addEventListener('pointercancel', () => { drawing=false; lastIdx=-1; });
-canvas.addEventListener('pointerleave', () => {
+canvas.addEventListener('pointerup',     () => { drawing = false; lastIdx = -1; });
+canvas.addEventListener('pointercancel', () => { drawing = false; lastIdx = -1; });
+canvas.addEventListener('pointerleave',  () => {
   document.getElementById('s-pos').textContent = 'x: — \u00a0y: —';
   document.getElementById('s-col').textContent = '—';
 });
 
 function status(i) {
-  if (i<0) return;
-  const x=i%W, y=Math.floor(i/W);
+  if (i < 0) return;
+  const x = i % W, y = Math.floor(i / W);
   document.getElementById('s-pos').textContent = `x:${x} \u00a0y:${y}`;
   document.getElementById('s-col').textContent = `${PALETTE[pixels[i]]} [${pixels[i]}]`;
 }
@@ -351,13 +389,13 @@ function setTool(t) {
   document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
   document.querySelector(`.tool-btn[data-tool="${t}"]`).classList.add('active');
   document.getElementById('s-tool').textContent =
-    ({pencil:'Pencil',eraser:'Eraser',fill:'Fill',eyedropper:'Eyedropper'})[t]||t;
-  canvas.style.cursor = t==='eraser' ? 'cell' : 'crosshair';
+    ({pencil:'Pencil', eraser:'Eraser', fill:'Fill', eyedropper:'Eyedropper'})[t] || t;
+  canvas.style.cursor = t === 'eraser' ? 'cell' : 'crosshair';
 }
 
 // ── Clear ──
 document.getElementById('btn-clear').addEventListener('click', () =>
-  modal('Clear Canvas','Reset all pixels to background (index 0)?', () => {
+  modal('Clear Canvas', 'Reset all pixels to white (index 0)?', () => {
     pixels.fill(0); render(); toast('Canvas cleared');
   }));
 
@@ -368,33 +406,37 @@ document.getElementById('tog-grid').addEventListener('change', e => {
 
 // ── Zoom ──
 document.getElementById('btn-zi').addEventListener('click', () => {
-  if (zoomI < ZOOM_LEVELS.length-1) { zoomI++; applyZoom(); }
+  if (zoomI < ZOOM_LEVELS.length - 1) { zoomI++; applyZoom(); }
 });
 document.getElementById('btn-zo').addEventListener('click', () => {
   if (zoomI > 0) { zoomI--; applyZoom(); }
 });
 document.getElementById('canvas-area').addEventListener('wheel', e => {
   e.preventDefault();
-  if (e.deltaY<0 && zoomI<ZOOM_LEVELS.length-1) { zoomI++; applyZoom(); }
-  if (e.deltaY>0 && zoomI>0) { zoomI--; applyZoom(); }
-}, {passive:false});
+  if (e.deltaY < 0 && zoomI < ZOOM_LEVELS.length - 1) { zoomI++; applyZoom(); }
+  if (e.deltaY > 0 && zoomI > 0) { zoomI--; applyZoom(); }
+}, { passive: false });
 
 // ── Keyboard shortcuts ──
 document.addEventListener('keydown', e => {
-  if (e.target.tagName==='INPUT') return;
-  ({p:()=>setTool('pencil'), e:()=>setTool('eraser'),
-    f:()=>setTool('fill'),   i:()=>setTool('eyedropper'),
-    '[':(()=>{ if(zoomI>0){zoomI--;applyZoom();} }),
-    ']':(()=>{ if(zoomI<ZOOM_LEVELS.length-1){zoomI++;applyZoom();} })
+  if (e.target.tagName === 'INPUT') return;
+  ({
+    p: () => setTool('pencil'),
+    e: () => setTool('eraser'),
+    f: () => setTool('fill'),
+    i: () => setTool('eyedropper'),
+    '[': () => { if (zoomI > 0) { zoomI--; applyZoom(); } },
+    ']': () => { if (zoomI < ZOOM_LEVELS.length - 1) { zoomI++; applyZoom(); } },
   })[e.key.toLowerCase()]?.();
 });
 
 // ── Toast ──
 let toastT;
-function toast(msg, ms=2200) {
+function toast(msg, ms = 2200) {
   const el = document.getElementById('toast');
   el.textContent = msg; el.classList.add('on');
-  clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('on'), ms);
+  clearTimeout(toastT);
+  toastT = setTimeout(() => el.classList.remove('on'), ms);
 }
 
 // ── Modal ──
@@ -412,7 +454,7 @@ document.getElementById('m-ok').addEventListener('click', () => {
   modalCb?.();
 });
 document.getElementById('modal-bg').addEventListener('click', e => {
-  if (e.target===document.getElementById('modal-bg'))
+  if (e.target === document.getElementById('modal-bg'))
     document.getElementById('modal-bg').classList.remove('on');
 });
 
