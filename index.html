@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pixel32 — 8-bit Pixel Editor</title>
+<title>Pixel20 — 8-bit Pixel Editor</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -110,7 +110,7 @@
 <body>
 
 <div id="topbar">
-  <div class="logo">Pixel32 <span>8-bit</span></div>
+  <div class="logo">Pixel20 <span>8-bit</span></div>
   <div class="sep"></div>
   <input id="img-name" type="text" value="untitled" spellcheck="false">
   <div class="sep"></div>
@@ -175,7 +175,7 @@
   <span id="s-pos">x: — &nbsp;y: —</span>
   <span id="s-col">—</span>
   <span id="s-tool">Pencil</span>
-  <span class="sr">32×32 · 8-bit · 1024px</span>
+  <span class="sr">20×20 · 8-bit · 400px</span>
 </div>
 
 <div id="toast"></div>
@@ -223,8 +223,8 @@ const PALETTE = (() => {
   return p.slice(0, 256);
 })();
 
-const W = 32, H = 32;
-const pixels = new Uint8Array(W * H); // all 0 = white
+const W = 20, H = 20;
+const pixels = new Uint8Array(W * H); // all 0 = white — 400 pixels
 let selIdx = 1, tool = 'pencil', drawing = false, lastIdx = -1, showGrid = true;
 
 const canvas  = document.getElementById('pixel-canvas');
@@ -235,10 +235,10 @@ const gridCtx = gridCv.getContext('2d');
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.5, 2, 3, 4];
 let zoomI = 2;
 
-function cellSize() { return Math.round(576 * ZOOM_LEVELS[zoomI]) / 32; }
+function cellSize() { return Math.round(560 * ZOOM_LEVELS[zoomI]) / 20; }
 
 function applyZoom() {
-  const sz = Math.round(576 * ZOOM_LEVELS[zoomI]);
+  const sz = Math.round(560 * ZOOM_LEVELS[zoomI]);
   canvas.style.width  = sz + 'px';
   canvas.style.height = sz + 'px';
   gridCv.style.width  = sz + 'px';
@@ -258,16 +258,16 @@ function drawGrid() {
   // Every-pixel lines — fine medium gray
   gridCtx.strokeStyle = 'rgba(0,0,0,0.15)';
   gridCtx.lineWidth = 0.5;
-  for (let i = 0; i <= 32; i++) {
+  for (let i = 0; i <= 20; i++) {
     const pos = Math.round(i * c) + 0.5;
     gridCtx.beginPath(); gridCtx.moveTo(pos, 0); gridCtx.lineTo(pos, s); gridCtx.stroke();
     gridCtx.beginPath(); gridCtx.moveTo(0, pos); gridCtx.lineTo(s, pos); gridCtx.stroke();
   }
 
-  // Every-8-pixel major lines — stronger
+  // Every-5-pixel major lines — stronger
   gridCtx.strokeStyle = 'rgba(0,0,0,0.35)';
   gridCtx.lineWidth = 1;
-  for (let i = 0; i <= 32; i += 8) {
+  for (let i = 0; i <= 20; i += 5) {
     const pos = Math.round(i * c) + 0.5;
     gridCtx.beginPath(); gridCtx.moveTo(pos, 0); gridCtx.lineTo(pos, s); gridCtx.stroke();
     gridCtx.beginPath(); gridCtx.moveTo(0, pos); gridCtx.lineTo(s, pos); gridCtx.stroke();
